@@ -1,0 +1,72 @@
+<mujoco>
+    <include file="scene.xml"/>
+    <include file="vx300s_dependencies.xml"/>
+
+    <equality>
+        <weld body1="mocap_left" body2="vx300s_left/gripper_link" solref="0.01 1" solimp=".25 .25 0.001" />
+        <weld body1="mocap_right" body2="vx300s_right/gripper_link" solref="0.01 1" solimp=".25 .25 0.001" />
+    </equality>
+
+     <visual>
+        <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+        <rgba haze="0.15 0.25 0.35 1"/>
+        <global azimuth="90" elevation="-20"/>
+        <quality shadowsize="8192"/>
+    </visual>
+
+    <worldbody>
+        <include file="vx300s_left.xml" />
+        <include file="vx300s_right.xml" />
+
+        <body mocap="true" name="mocap_left" pos="-0.3 0.029294 0.44705" quat="0.70710678 0. 0. 0.70710678">
+            <site pos="0 0 0" size="0.003 0.003 0.03" type="box" name="mocap_left_site1" rgba="1 0 0 1"/>
+            <site pos="0 0 0" size="0.003 0.03 0.003" type="box" name="mocap_left_site2" rgba="1 0 0 1"/>
+            <site pos="0 0 0" size="0.03 0.003 0.003" type="box" name="mocap_left_site3" rgba="1 0 0 1"/>
+        </body>
+        <body mocap="true" name="mocap_right" pos="0.3 0.029294 0.44705" quat="0.70710678 0. 0. 0.70710678">
+            <site pos="0 0 0" size="0.003 0.003 0.03" type="box" name="mocap_right_site1" rgba="1 0 0 1"/>
+            <site pos="0 0 0" size="0.003 0.03 0.003" type="box" name="mocap_right_site2" rgba="1 0 0 1"/>
+            <site pos="0 0 0" size="0.03 0.003 0.003" type="box" name="mocap_right_site3" rgba="1 0 0 1"/>
+        </body>
+
+        <body name="O02@0094@00001" pos="0.04663892886477328 0.08532015353822565 0.06195879001529807" quat="0.780259368723278 -0.05036359262558933 0.06643811100549375 -0.6198748288674232">
+            <geom condim="4" solimp="2 1 0.01" solref="0.01 1" friction="1 0.005 0.0001" pos="0 0 0" type="mesh" mesh="O02@0094@00001" name="O02@0094@00001_mesh" />
+            <joint name="O02@0094@00001_joint" type="free" frictionloss="0.01"/>
+            <inertial pos="0 0 0" mass="0.05" diaginertia="0.002 0.002 0.002" />
+        </body>
+
+        <body name="O02@0094@00004" pos="-0.0022375868633158907 0.08810858404294254 0.0690582105760702" quat="0.776814440182669 -0.046876307549817184 0.004158021218770739 -0.6279686681465292">
+            <geom  condim="4" solimp="2 1 0.01" solref="0.01 1" friction="1 0.005 0.0001" pos="0 0 0" type="mesh" mesh="O02@0094@00004" name="O02@0094@00004_mesh" />
+            <joint name="O02@0094@00004_joint" type="free"  frictionloss="0.01"/>
+            <inertial pos="0 0 0" mass="0.05" diaginertia="0.002 0.002 0.002" />
+
+        </body>
+        <body name="S20005" pos="0.33172955974441304 0.03773109446484024 0.08590846929792499" quat="0.485491159400405 -0.4399633130039539 -0.4228928173947956 -0.6260130049372197">
+            <geom condim="4" solimp="2 1 0.01" solref="0.01 1" friction="1 0.005 0.0001" pos="0 0 0" type="mesh" mesh="S20005" name="knife"/>
+            
+            <joint name="S20005_joint" type="free" frictionloss="0.01"/>
+            <inertial pos="0 0 0" mass="0.05" diaginertia="0.002 0.002 0.002" />
+        </body>
+        
+
+    </worldbody>
+
+    <actuator>
+        <position ctrllimited="true" ctrlrange="0.021 0.057" joint="vx300s_left/left_finger" kp="200"  user="1"/>
+        <position ctrllimited="true" ctrlrange="-0.057 -0.021" joint="vx300s_left/right_finger" kp="200"  user="1"/>
+
+        <position ctrllimited="true" ctrlrange="0.021 0.057" joint="vx300s_right/left_finger" kp="200"  user="1"/>
+        <position ctrllimited="true" ctrlrange="-0.057 -0.021" joint="vx300s_right/right_finger" kp="200"  user="1"/>
+
+    </actuator>
+
+    
+
+    <asset>
+        <mesh name="S20005" file="S20005/scan.obj" scale="1 1 1"/>
+        <mesh name="O02@0094@00001" file="O02@0094@00001/scan.obj" scale="1 1 1"/>
+        <mesh name="O02@0094@00004" file="O02@0094@00004/scan.obj" scale="2 1 1"/>
+    </asset>
+
+
+</mujoco>
