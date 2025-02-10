@@ -3,9 +3,9 @@ import json
 import numpy as np
 from pyquaternion import Quaternion
 
-from constants import SIM_TASK_CONFIGS
+from constants import SIM_TASK_CONFIGS, PUPPET_JOINT2POS
 from ee_sim_env import make_ee_sim_env
-
+from time import sleep
 import IPython
 e = IPython.embed
 
@@ -16,7 +16,7 @@ print(matplotlib.get_backend())
 
 from matplotlib import pyplot as plt
 
-def get_policy(task_name, inject_noise=False):
+def get_policy(task_name, inject_noise=False, obj_names=None):
 
     if 'sim_transfer_cube' in task_name:
         return PickAndTransferPolicy(inject_noise)
@@ -25,7 +25,7 @@ def get_policy(task_name, inject_noise=False):
     elif 'general_task' in task_name:
         return GeneralTaskPolicy(inject_noise)
     elif 'primitive' in task_name:
-        return PrimitivesPolicy(inject_noise)
+        return PrimitivesPolicy(inject_noise, obj_names)
     else:
         raise NotImplementedError
     
@@ -283,49 +283,86 @@ class GeneralTaskPolicy(BasePolicy):
 
 
 class PrimitivesPolicy(BasePolicy):
-    def __init__(self, annotations_file=None, inject_noise=False):
+    def __init__(self, inject_noise=False, obj_names=None):
         super().__init__(inject_noise)
-        if not annotations_file:
-            self.annotations_file = "annotations.json"
-            with open(self.annotations_file, 'r') as f:
-                self.annotations = json.load(f)
+        self.obj_names = obj_names
+        self.state = {"left": None, "right": None}  # Track current execution phase for each arm
 
     def generate_trajectory(self, ts_first):
-        """
-        Example annotations file:
-            "1": {
-            "left": {
-                "actions": [
-                    "IDLE"
-                ],
-                "params": {},
-                "grabbed_object": null
-            },
-            "right": {
-                "actions": [
-                    "IDLE"
-                ],
-                "params": {},
-                "grabbed_object": null
-            }
-        },
-        """
-        init_mocap_pose_right = ts_first.observation['mocap_pose_right']
-        init_mocap_pose_left = ts_first.observation['mocap_pose_left']
+        pass
+    
+    def is_reached(self, current, target, threshold=0.005):
+        return np.linalg.norm(current - target) < threshold
 
-        gripper_right_quat = Quaternion(init_mocap_pose_right[3:])
-        gripper_right_quat = gripper_right_quat * Quaternion(axis=[0.0, 0.0, 1.0], degrees=60)
+    def move_and_tilt(self, ts, arm, params):
+        """Move to a target position and orientation."""
+        mocap_pose = ts.observation[f'mocap_pose_{arm}']
+        current_xyz, current_quat = mocap_pose[:3], mocap_pose[3:]
+        target_xyz, target_quat = params.get("move_position", None), params.get("tilt_quat", None)
+        target_xyz = np.array(target_xyz, dtype='float64')[4] if target_xyz is not None else None
+        target_quat = np.array(target_quat, dtype='float64')[3] if target_quat is not None else None
 
-        gripper_left_quat = Quaternion(init_mocap_pose_left[3:])
-        gripper_left_quat = gripper_left_quat * Quaternion(axis=[0.0, 0.0, 1.0], degrees=-60)
+        gripper_status = ts.observation["qpos"][6 if arm =="left" else -1]
+        # Interpolate movement
+        if target_xyz is None:
+            new_xyz = current_xyz
+            terminated_move = True
+        else:
+            new_xyz = current_xyz + 0.02 * (target_xyz - current_xyz)
+            terminated_move = self.is_reached(current_xyz, target_xyz)
+        if target_quat is None:
+            terminated_tilt = True
+            new_quat = target_quat
+        else:
+            new_quat = Quaternion.slerp(Quaternion(current_quat), Quaternion(target_quat), 0.1).elements
+            terminated_tilt = self.is_reached(current_quat, target_quat)
+        return np.concatenate([new_xyz, new_quat, [gripper_status]]), terminated_tilt and terminated_move
 
-   
+    def grab(self, ts, arm, params):
+        """Grab an object: move close, then close gripper, then check contact."""
+        phase = self.state[arm] or "approach"
+        mocap_pose = ts.observation[f'mocap_pose_{arm}']
+        current_xyz = mocap_pose[:3]
+        target_quat = mocap_pose[3:]
         
-        self.left_trajectory = [{"t": 0, "xyz": init_mocap_pose_left[:3], "quat": init_mocap_pose_left[3:], "gripper": 1}]
-        self.right_trajectory = [{"t": 0, "xyz": init_mocap_pose_right[:3], "quat": init_mocap_pose_right[3:], "gripper": 1}]
+        if phase == "approach":
+            action, reached = self.move_and_tilt(ts, arm, params)
+            if reached:
+                self.state[arm] = "close"
+            return action, False
         
-    def __call__(self, ts):
-        return super().__call__(ts)
+        if phase == "close":
+            action = np.concatenate([current_xyz, target_quat, [0]])  # Close gripper
+            self.state[arm] = "verify"
+            return action, False
+        
+        if phase == "verify":
+            gripper_contact = ts.observation[f'contact'][arm]
+            if params.get("grabbed_object", None) in gripper_contact:
+                terminated = True
+            else:
+                terminated = False
+
+            self.state[arm] = None  # Reset state
+            return np.concatenate([current_xyz, target_quat, [0]]), terminated
+        
+    def release(self, ts, arm):
+        """Open gripper to release object."""
+        mocap_pose = ts.observation[f'mocap_pose_{arm}']
+        action = np.concatenate([mocap_pose[:3], mocap_pose[3:], [1]])  # Open gripper
+        return action, True
+
+    def __call__(self, ts, arm, primitive, primitive_params):
+        """Execute the requested primitive."""
+        if primitive == "MOVE" or primitive == "TILT":
+            return self.move_and_tilt(ts, arm, primitive_params)
+        if primitive == "GRAB":
+            return self.grab(ts, arm, primitive_params)
+        if primitive == "RELEASE":
+            return self.release(ts, arm)
+        
+        return np.zeros(8), True
+
     
 def test_policy(task_name):
     # example rolling out pick_and_transfer policy
@@ -340,28 +377,32 @@ def test_policy(task_name):
         env = make_ee_sim_env('sim_insertion')
     elif 'general_task' in task_name:
         env = make_ee_sim_env('general_task')
+    elif 'primitive' in task_name:
+        env = make_ee_sim_env('primitive')
     else:
         raise NotImplementedError
 
 
-    
+
     # Get mocap positions
     # Get left gripper pose
+    #objects=["O02@0094@00001", "O02@0094@00004", "S20005"]
 
     for episode_idx in range(2):
         ts = env.reset()
-
+        print(ts.observation['contact'])
+        exit()
         episode = [ts]
         if onscreen_render:
             ax = plt.subplot()
             plt_img = ax.imshow(ts.observation['images']['teleoperator_pov'])
             plt.ion()
 
-        policy = get_policy(task_name, inject_noise)
+        policy = get_policy(task_name, inject_noise, object)
         for step in range(episode_len):
             action = policy(ts)
             ts = env.step(action)
-            print(action)
+            #print(step, action)
             episode.append(ts)
             if onscreen_render:
                 plt_img.set_data(ts.observation['images']['teleoperator_pov'])
@@ -375,8 +416,81 @@ def test_policy(task_name):
             print(f"{episode_idx=} Failed")
 
 
+def test_policy_primitive(task_name):
+    # example rolling out pick_and_transfer policy
+    onscreen_render = True
+    inject_noise = False
+
+    
+    # setup the environment
+    env = make_ee_sim_env('primitive')
+    # Get mocap positions
+    # Get left gripper pose
+    objects=["O02@0094@00001", "O02@0094@00004", "S20005"]
+    policy = PrimitivesPolicy(inject_noise, objects)
+
+    with open("annotations.json", 'r') as f:
+        annotations = json.load(f)
+
+    annotations_keys = list(annotations.keys())
+
+    ts = env.reset()
+    finished = False
+    curr_primitive = None
+    if onscreen_render:
+        ax = plt.subplot()
+        plt_img = ax.imshow(ts.observation['images']['teleoperator_pov'])
+        plt.ion()
+
+    p_index = 0
+    primitives_to_execute = {"left": [], "right": []}
+    while not finished:
+        if curr_primitive is None:
+            curr_primitive = annotations[annotations_keys[p_index]]
+            print(curr_primitive)
+            left_params = curr_primitive["left"]["params"]
+            right_params = curr_primitive["right"]["params"]
+
+            primitives_to_execute["left"] = curr_primitive["left"]["actions"]
+            primitives_to_execute["right"] = curr_primitive["right"]["actions"]
+
+            if "IDLE" in primitives_to_execute["left"]:
+                primitives_to_execute["left"] = []
+            if "IDLE" in primitives_to_execute["right"]:
+                primitives_to_execute["right"] = []
+            p_index += 1
+
+        finished_primitives = len(primitives_to_execute["left"]) == 0 and len(primitives_to_execute["right"]) == 0
+        terminated_left = True
+        terminated_right = True
+
+        print(primitives_to_execute, terminated_left, terminated_right, finished_primitives)
+
+        while not finished_primitives:
+
+            if terminated_left and len(primitives_to_execute["left"]) > 0:
+                p_l = primitives_to_execute["left"].pop(0)
+                action_left, terminated_left = policy(ts, "left", p_l, left_params)
+
+            if terminated_left and len(primitives_to_execute["left"]) > 0:
+                p_r = primitives_to_execute["right"].pop(0)
+                action_right, terminated_right = policy(ts, "right", p_r, right_params)
+
+            ts= env.step(np.concatenate([action_left, action_right]))
+
+            if onscreen_render:
+                plt_img.set_data(ts.observation['images']['teleoperator_pov'])
+                plt.pause(0.02)
+
+            finished_primitives = (len(primitives_to_execute["left"]) == 0 and len(primitives_to_execute["right"]) == 0) or (terminated_left and terminated_right)
+        
+        curr_primitive = None
+    plt.close()
+
+
 if __name__ == '__main__':
 
-    test_task_name = 'general_task'
-    test_policy(test_task_name)
+    test_task_name = 'primitive'
+    #test_policy(test_task_name)
+    test_policy_primitive(test_task_name)
 

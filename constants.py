@@ -37,6 +37,13 @@ SIM_TASK_CONFIGS = {
         'episode_len': 3000,
         'camera_names': ['collaborator_pov', 'teleoperator_pov']
     },
+
+    'primitive': {
+        'dataset_dir': DATA_DIR + '/primitive',
+        'num_episodes': 1,
+        'episode_len': 3000,
+        'camera_names': ['collaborator_pov', 'teleoperator_pov']
+    },
 }
 
 ### Simulation envs fixed constants

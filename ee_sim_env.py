@@ -54,6 +54,13 @@ def make_ee_sim_env(task_name):
         task = GeneralEETask(random=False)
         env = control.Environment(physics, task, time_limit=20, control_timestep=DT,
                                   n_sub_steps=None, flat_observation=False)
+    elif 'primitive' in task_name:
+        xml_path = os.path.join(XML_DIR, f'bimanual_viperx_ee_general.xml')
+        physics = mujoco.Physics.from_xml_path(xml_path)
+        geom_ids = [physics.model.name2id(geom_name, 'geom') for geom_name in ['O02@0094@00001_mesh', 'O02@0094@00004_mesh', 'knife']]
+        task = GeneralEETask(geom_ids, random=False)
+        env = control.Environment(physics, task, time_limit=20, control_timestep=DT,
+                                  n_sub_steps=None, flat_observation=False)
     else:
         raise NotImplementedError
     return env
@@ -275,9 +282,10 @@ class InsertionEETask(BimanualViperXEETask):
         return reward
 
 class GeneralEETask(BimanualViperXEETask):
-    def __init__(self, random=None):
+    def __init__(self, geoms_ids, random=None):
         super().__init__(random=random)
         self.max_reward = 3
+        self.geoms_ids = geoms_ids
 
     @staticmethod
     def get_env_state(physics):
@@ -288,14 +296,43 @@ class GeneralEETask(BimanualViperXEETask):
         """Sets the state of the environment at the start of each episode."""
         self.initialize_robots(physics)
         
-        # Randomize object position
-        #object_pose = sample_box_pose()
-        #object_start_idx = physics.model.name2id('red_box_joint', 'joint')
-        #np.copyto(physics.data.qpos[object_start_idx : object_start_idx + 7], physics.data.qpos[object_start_idx : object_start_idx + 7])
-
         super().initialize_episode(physics)
 
     def get_reward(self, physics):
         # return whether left gripper is holding the box
         reward = 0
         return reward
+    
+    def get_observation(self, physics):
+        obs = super().get_observation(physics)
+
+        # Get the IDs of the left and right grippers
+        left_gripper_id = physics.model.name2id("vx300s_left/10_left_gripper_finger", "geom")
+        right_gripper_id = physics.model.name2id("vx300s_right/10_right_gripper_finger", "geom")
+
+        # Initialize contact dictionary
+        obs["contact"] = {"left": set(), "right": set()}
+
+        # Loop through all contacts and update the dictionary
+        for i_contact in range(physics.data.ncon):
+            geom1 = physics.data.contact[i_contact].geom1
+            geom2 = physics.data.contact[i_contact].geom2
+            
+            name_geom1 = physics.model.id2name(geom1, "geom")
+            name_geom2 = physics.model.id2name(geom2, "geom")
+
+            # If either gripper is in contact, add the other geom to the set
+            if geom1 == left_gripper_id:
+                obs["contact"]["left"].add(name_geom2)
+            elif geom2 == left_gripper_id:
+                obs["contact"]["left"].add(name_geom1)
+
+            if geom1 == right_gripper_id:
+                obs["contact"]["right"].add(name_geom2)
+            elif geom2 == right_gripper_id:
+                obs["contact"]["right"].add(name_geom1)
+
+        return obs
+
+    def get_reward(self, physics):
+        raise NotImplementedError
