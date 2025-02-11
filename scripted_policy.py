@@ -287,20 +287,24 @@ class PrimitivesPolicy(BasePolicy):
         super().__init__(inject_noise)
         self.obj_names = obj_names
         self.state = {"left": None, "right": None}  # Track current execution phase for each arm
+        self.approach_distance = 0.02
+        self.approach_params = {"left": None, "right": None}
 
     def generate_trajectory(self, ts_first):
         pass
     
-    def is_reached(self, current, target, threshold=0.005):
+    def is_reached(self, current, target, threshold=0.01):
+        print(f"{current=}, {target=}, {np.linalg.norm(current - target)=}")
         return np.linalg.norm(current - target) < threshold
 
-    def move_and_tilt(self, ts, arm, params):
+    def move_and_tilt(self, ts, arm, params, approaching=False):
         """Move to a target position and orientation."""
         mocap_pose = ts.observation[f'mocap_pose_{arm}']
         current_xyz, current_quat = mocap_pose[:3], mocap_pose[3:]
         target_xyz, target_quat = params.get("move_position", None), params.get("tilt_quat", None)
-        target_xyz = np.array(target_xyz, dtype='float64')[4] if target_xyz is not None else None
-        target_quat = np.array(target_quat, dtype='float64')[3] if target_quat is not None else None
+        if not approaching:
+            target_xyz = np.array(target_xyz, dtype='float64')[0] if target_xyz is not None else None
+            target_quat = np.array(target_quat, dtype='float64')[0] if target_quat is not None else None
 
         gripper_status = ts.observation["qpos"][6 if arm =="left" else -1]
         # Interpolate movement
@@ -312,10 +316,11 @@ class PrimitivesPolicy(BasePolicy):
             terminated_move = self.is_reached(current_xyz, target_xyz)
         if target_quat is None:
             terminated_tilt = True
-            new_quat = target_quat
+            new_quat = current_quat
         else:
             new_quat = Quaternion.slerp(Quaternion(current_quat), Quaternion(target_quat), 0.1).elements
             terminated_tilt = self.is_reached(current_quat, target_quat)
+
         return np.concatenate([new_xyz, new_quat, [gripper_status]]), terminated_tilt and terminated_move
 
     def grab(self, ts, arm, params):
@@ -324,9 +329,25 @@ class PrimitivesPolicy(BasePolicy):
         mocap_pose = ts.observation[f'mocap_pose_{arm}']
         current_xyz = mocap_pose[:3]
         target_quat = mocap_pose[3:]
+        object_to_grab = params.get("object_grabbed", None)
+        if object_to_grab is None:
+            if arm == "left":
+                object_to_grab = self.obj_names[0]
+            else:
+                object_to_grab = self.obj_names[-1]
+
+        id_object = self.obj_names.index(object_to_grab)
+        
+        object_to_grab  = object_to_grab + "_mesh"
         
         if phase == "approach":
-            action, reached = self.move_and_tilt(ts, arm, params)
+            "Get info about the object to grab"
+            object_pose = ts.observation["env_state"][id_object*7: id_object*7 + 7]
+            params["move_position"] = object_pose[:3]
+            #params["tilt_quat"] = object_pose[3:]
+            self.approach_params[arm] = params
+
+            action, reached = self.move_and_tilt(ts, arm, params, approaching=True)
             if reached:
                 self.state[arm] = "close"
             return action, False
@@ -338,7 +359,7 @@ class PrimitivesPolicy(BasePolicy):
         
         if phase == "verify":
             gripper_contact = ts.observation[f'contact'][arm]
-            if params.get("grabbed_object", None) in gripper_contact:
+            if object_to_grab in gripper_contact:
                 terminated = True
             else:
                 terminated = False
@@ -354,6 +375,7 @@ class PrimitivesPolicy(BasePolicy):
 
     def __call__(self, ts, arm, primitive, primitive_params):
         """Execute the requested primitive."""
+        print(f"Executing primitive: {primitive} with {arm} arm.")
         if primitive == "MOVE" or primitive == "TILT":
             return self.move_and_tilt(ts, arm, primitive_params)
         if primitive == "GRAB":
@@ -441,7 +463,7 @@ def test_policy_primitive(task_name):
         ax = plt.subplot()
         plt_img = ax.imshow(ts.observation['images']['teleoperator_pov'])
         plt.ion()
-
+    
     p_index = 0
     primitives_to_execute = {"left": [], "right": []}
     while not finished:
@@ -456,33 +478,62 @@ def test_policy_primitive(task_name):
 
             if "IDLE" in primitives_to_execute["left"]:
                 primitives_to_execute["left"] = []
+                p_l = None
+            else:
+                p_l = primitives_to_execute["left"].pop(0)
+
             if "IDLE" in primitives_to_execute["right"]:
                 primitives_to_execute["right"] = []
+                p_r = None
+            else:
+                p_r = primitives_to_execute["right"].pop(0)
             p_index += 1
 
         finished_primitives = len(primitives_to_execute["left"]) == 0 and len(primitives_to_execute["right"]) == 0
-        terminated_left = True
-        terminated_right = True
+        terminated_left = False
+        terminated_right = False
 
         print(primitives_to_execute, terminated_left, terminated_right, finished_primitives)
 
         while not finished_primitives:
+            obs = ts.observation
+            if not terminated_left:
+                if p_l is not None:
+                    action_left, terminated_left = policy(ts, "left", p_l, left_params)
+            else:
+                if len(primitives_to_execute["left"]) > 0:
+                    p_l = primitives_to_execute["left"].pop(0)
+                    action_left, terminated_left = policy(ts, "left", p_l, left_params)
+                else:
+                    p_l = None
+                    # build action left based on the prev obs
+                    mocap_pose_left = obs['mocap_pose_left']
+                    gripper_status_left = ts.observation["qpos"][6]
+                    action_left = np.concatenate([mocap_pose_left[:3], mocap_pose_left[3:], [gripper_status_left]])
+                    terminated_left = True
 
-            if terminated_left and len(primitives_to_execute["left"]) > 0:
-                p_l = primitives_to_execute["left"].pop(0)
-                action_left, terminated_left = policy(ts, "left", p_l, left_params)
+            if not terminated_right:
+                if p_r is not None:
+                    action_right, terminated_right = policy(ts, "right", p_r, right_params)
+            else:
+                if len(primitives_to_execute["right"]) > 0:
+                    p_r = primitives_to_execute["right"].pop(0)
+                    action_right, terminated_right = policy(ts, "right", p_r, right_params)
+                else:
+                    p_r = None
+                    # build action right based on the prev obs
+                    mocap_pose_right = obs['mocap_pose_right']
+                    gripper_status_right = ts.observation["qpos"][-1]
+                    action_right = np.concatenate([mocap_pose_right[:3], mocap_pose_right[3:], [gripper_status_right]])
+                    terminated_right = True
 
-            if terminated_left and len(primitives_to_execute["left"]) > 0:
-                p_r = primitives_to_execute["right"].pop(0)
-                action_right, terminated_right = policy(ts, "right", p_r, right_params)
-
-            ts= env.step(np.concatenate([action_left, action_right]))
+            ts = env.step(np.concatenate([action_left, action_right]))
 
             if onscreen_render:
                 plt_img.set_data(ts.observation['images']['teleoperator_pov'])
                 plt.pause(0.02)
 
-            finished_primitives = (len(primitives_to_execute["left"]) == 0 and len(primitives_to_execute["right"]) == 0) or (terminated_left and terminated_right)
+            finished_primitives = (len(primitives_to_execute["left"]) == 0 and len(primitives_to_execute["right"]) == 0) and (terminated_left and terminated_right)
         
         curr_primitive = None
     plt.close()

@@ -18,12 +18,12 @@
         <include file="vx300s_left.xml" />
         <include file="vx300s_right.xml" />
 
-        <body mocap="true" name="mocap_left" pos="-0.3 0.029294 0.44705" quat="0.70710678 0. 0. 0.70710678">
+        <body mocap="true" name="mocap_left" pos="-0.3 0.019294 0.44705" quat="0.70710678 0. 0. 0.70710678">
             <site pos="0 0 0" size="0.003 0.003 0.03" type="box" name="mocap_left_site1" rgba="1 0 0 1"/>
             <site pos="0 0 0" size="0.003 0.03 0.003" type="box" name="mocap_left_site2" rgba="1 0 0 1"/>
             <site pos="0 0 0" size="0.03 0.003 0.003" type="box" name="mocap_left_site3" rgba="1 0 0 1"/>
         </body>
-        <body mocap="true" name="mocap_right" pos="0.3 0.029294 0.44705" quat="0.70710678 0. 0. 0.70710678">
+        <body mocap="true" name="mocap_right" pos="0.3 0.019294 0.44705" quat="0.70710678 0. 0. 0.70710678">
             <site pos="0 0 0" size="0.003 0.003 0.03" type="box" name="mocap_right_site1" rgba="1 0 0 1"/>
             <site pos="0 0 0" size="0.003 0.03 0.003" type="box" name="mocap_right_site2" rgba="1 0 0 1"/>
             <site pos="0 0 0" size="0.03 0.003 0.003" type="box" name="mocap_right_site3" rgba="1 0 0 1"/>
@@ -42,7 +42,7 @@
 
         </body>
         <body name="S20005" pos="0.33172955974441304 0.03773109446484024 0.08590846929792499" quat="0.485491159400405 -0.4399633130039539 -0.4228928173947956 -0.6260130049372197">
-            <geom condim="4" solimp="2 1 0.01" solref="0.01 1" friction="1 0.005 0.0001" pos="0 0 0" type="mesh" mesh="S20005" name="knife"/>
+            <geom condim="4" solimp="2 1 0.01" solref="0.01 1" friction="1 0.005 0.0001" pos="0 0 0" type="mesh" mesh="S20005" name="S20005_mesh"/>
             
             <joint name="S20005_joint" type="free" frictionloss="0.01"/>
             <inertial pos="0 0 0" mass="0.05" diaginertia="0.002 0.002 0.002" />

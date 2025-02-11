@@ -57,7 +57,7 @@ def make_ee_sim_env(task_name):
     elif 'primitive' in task_name:
         xml_path = os.path.join(XML_DIR, f'bimanual_viperx_ee_general.xml')
         physics = mujoco.Physics.from_xml_path(xml_path)
-        geom_ids = [physics.model.name2id(geom_name, 'geom') for geom_name in ['O02@0094@00001_mesh', 'O02@0094@00004_mesh', 'knife']]
+        geom_ids = [physics.model.name2id(geom_name, 'geom') for geom_name in ['O02@0094@00001_mesh', 'O02@0094@00004_mesh', 'S20005_mesh']]
         task = GeneralEETask(geom_ids, random=False)
         env = control.Environment(physics, task, time_limit=20, control_timestep=DT,
                                   n_sub_steps=None, flat_observation=False)
@@ -333,6 +333,3 @@ class GeneralEETask(BimanualViperXEETask):
                 obs["contact"]["right"].add(name_geom1)
 
         return obs
-
-    def get_reward(self, physics):
-        raise NotImplementedError
