@@ -3,8 +3,6 @@ logs
 wandb
 outputs
 data
-assets/*/*
-annotations.json
 MUJOCO_LOG.txt
 data_local
 .vscode

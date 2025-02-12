@@ -287,7 +287,8 @@ class PrimitivesPolicy(BasePolicy):
         super().__init__(inject_noise)
         self.obj_names = obj_names
         self.state = {"left": None, "right": None}  # Track current execution phase for each arm
-        self.approach_distance = 0.02
+        self.left_approach_distance = [0, 0, 0.05]
+        self.right_approach_distance = [0, -0.05, 0.05]
         self.approach_params = {"left": None, "right": None}
 
     def generate_trajectory(self, ts_first):
@@ -298,7 +299,7 @@ class PrimitivesPolicy(BasePolicy):
         print(f"{current=}, {target=}, {np.linalg.norm(current - target)=}")
         return np.linalg.norm(current - target) < threshold
     
-    def move_and_tilt(self, ts, arm, params, approaching=False, threshold=0.01):
+    def move_and_tilt(self, ts, arm, params, approaching=False, threshold=0.03):
         """Move to a target position and orientation."""
         mocap_pose = ts.observation[f'mocap_pose_{arm}']
         current_xyz, current_quat = mocap_pose[:3], mocap_pose[3:]
@@ -309,16 +310,18 @@ class PrimitivesPolicy(BasePolicy):
         if not approaching:
             target_xyz = np.array(target_xyz, dtype='float64')[0] if target_xyz is not None else None
             target_quat = np.array(target_quat, dtype='float64')[12] if target_quat is not None else None
-        
-        if arm == "left" and target_quat is not None:
-            lq = Quaternion(target_quat)
-            lq = lq * Quaternion(axis=[0.0, 0.0, 1.0], degrees=-60)
-            target_quat = lq.elements
-        elif arm == "right" and target_quat is not None:
-            rq = Quaternion(target_quat)
-            rq = rq * Quaternion(axis=[0.0, 0.0, 1.0], degrees=60)
-            target_quat = rq.elements
 
+            if arm == "left" and target_quat is not None:
+                lq = Quaternion(target_quat)
+                lq = lq * Quaternion(axis=[0.0, 0.0, 1.0], degrees=-60)
+                target_quat = lq.elements
+            elif arm == "right" and target_quat is not None:
+                rq = Quaternion(target_quat)
+                rq = rq * Quaternion(axis=[0.0, 0.0, 1.0], degrees=60)
+                target_quat = rq.elements
+        else:
+            # set target quat to gripper towards the table
+            target_quat = Quaternion(axis=[1.0, 0.0, 0.0], degrees=-70).elements
 
         gripper_status = ts.observation["qpos"][6 if arm =="left" else -1]
         # Interpolate movement
@@ -326,7 +329,7 @@ class PrimitivesPolicy(BasePolicy):
             new_xyz = current_xyz
             terminated_move = True
         else:
-            new_xyz = current_xyz + 0.02 * (target_xyz - current_xyz)
+            new_xyz = current_xyz + 0.05 * (target_xyz - current_xyz)
             terminated_move = self.is_reached(current_xyz, target_xyz, threshold)
 
         if target_quat is None:
@@ -360,14 +363,26 @@ class PrimitivesPolicy(BasePolicy):
             
             object_pose = ts.observation["env_state"][id_object*7: id_object*7 + 7]
             #best_quat = self.compute_grasp_quat(object_pose[3:], "knife")
-            
-            params["move_position"] = object_pose[:3]
-            params["tilt_quat"] = object_pose[3:]
+            if arm == "left":
+                params["move_position"] = object_pose[:3] + np.array(self.left_approach_distance)
+                self.left_approach_distance[-1] -= 0.02
+            else:
+                params["move_position"] = object_pose[:3] + np.array(self.right_approach_distance)
+                self.right_approach_distance[-1] -= 0.02
+
+            q_grasp = Quaternion(object_pose[3:]) * Quaternion(axis=[1, 0, 0], angle=3.1416)  # Rotate by π around X
+
+            params["tilt_quat"] = q_grasp.elements
             self.approach_params[arm] = params
             
-            action, reached = self.move_and_tilt(ts, arm, params, approaching=True, threshold=0.01)
-            if reached:
+            action, reached = self.move_and_tilt(ts, arm, params, approaching=True, threshold=0.03)
+
+            if reached and self.approach_distance[-1] <= 0:
                 self.state[arm] = "close"
+                if arm == "left":
+                    self.left_approach_distance = [0, 0, 0.05]
+                else:
+                    self.right_approach_distance = [0, -0.05, 0.05]
             return action, False
         
         if phase == "close":
@@ -398,7 +413,10 @@ class PrimitivesPolicy(BasePolicy):
         if primitive == "MOVE" or primitive == "TILT":
             return self.move_and_tilt(ts, arm, primitive_params)
         if primitive == "GRAB":
-            return self.grab(ts, arm, primitive_params)
+            mocap_pose = ts.observation[f'mocap_pose_{arm}']
+            current_xyz, current_quat = mocap_pose[:3], mocap_pose[3:]
+            gripper_status = ts.observation["qpos"][6 if arm =="left" else -1]
+            return np.concatenate([current_xyz, current_quat, [gripper_status]]), True
         if primitive == "RELEASE":
             return self.release(ts, arm)
         
@@ -481,23 +499,29 @@ def test_policy_primitive(task_name):
     finished = False
     curr_primitive = None
     if onscreen_render:
-        fig, ax = plt.subplots(2, 2, figsize=(10, 8))  # Two subplots side by side
+        fig, ax = plt.subplots(3, 2, figsize=(10, 10))  # Two subplots side by side
         plt_img_teleop = ax[0][0].imshow(ts.observation['images']['teleoperator_pov'])
         plt_img_collab = ax[0][1].imshow(ts.observation['images']['collaborator_pov'])
         plt_img_left = ax[1][0].imshow(ts.observation['images']['left_wrist'])
         plt_img_right = ax[1][1].imshow(ts.observation['images']['right_wrist'])
+        plt_img_left_depth = ax[2][0].imshow(ts.observation['images']['left_depth'])
+        plt_img_right_depth = ax[2][1].imshow(ts.observation['images']['right_depth'])
         
         ax[0][0].set_title("Teleoperator View")
         ax[0][1].set_title("Collaborator View")
         ax[1][0].set_title("Left Wrist View")
         ax[1][1].set_title("Right Wrist View")
+        ax[2][0].set_title("Left Wrist Depth")
+        ax[2][1].set_title("Right Wrist Depth")
 
         
         plt.ion()  # Interactive mode to update images dynamically
-        plt_img_teleop.set_data(ts.observation['images']['left_wrist'])
-        plt_img_collab.set_data(ts.observation['images']['right_wrist'])
+        plt_img_teleop.set_data(ts.observation['images']['teleoperator_pov'])
+        plt_img_collab.set_data(ts.observation['images']['collaborator_pov'])
         plt_img_left.set_data(ts.observation['images']['left_wrist'])
         plt_img_right.set_data(ts.observation['images']['right_wrist'])
+        plt_img_left_depth.set_data(ts.observation['images']['left_depth'])
+        plt_img_right_depth.set_data(ts.observation['images']['right_depth'])
 
     p_index = 0
     primitives_to_execute = {"left": [], "right": []}
@@ -523,6 +547,8 @@ def test_policy_primitive(task_name):
             else:
                 p_r = primitives_to_execute["right"].pop(0)
             p_index += 1
+            if p_index >= len(annotations_keys):
+                finished = True
 
         finished_primitives = len(primitives_to_execute["left"]) == 0 and len(primitives_to_execute["right"]) == 0
         terminated_left = False
@@ -569,6 +595,8 @@ def test_policy_primitive(task_name):
                 plt_img_collab.set_data(ts.observation['images']['collaborator_pov'])
                 plt_img_left.set_data(ts.observation['images']['left_wrist'])
                 plt_img_right.set_data(ts.observation['images']['right_wrist'])
+                plt_img_left_depth.set_data(ts.observation['images']['left_depth'])
+                plt_img_right_depth.set_data(ts.observation['images']['right_depth'])
                 plt.pause(0.02)  # Pause to allow the figure to update
                 
             # TODO: Check if it needs also p_{r,l} = None

@@ -388,4 +388,23 @@ class GeneralEETask(BimanualViperXEETask):
             elif geom2 == right_gripper_id:
                 obs["contact"]["right"].add(name_geom1)
 
+        # Add depth images to the observation
+        depth_l = physics.render(height=480, width=640, camera_id="left_wrist", depth=True)
+        # Shift nearest values to the origin.
+        depth_l -= depth_l.min()
+        # Scale by 2 mean distances of near rays.
+        depth_l /= 2*depth_l[depth_l <= 1].mean()
+        # Scale to [0, 255]
+        pixels_l = 255*np.clip(depth_l, 0, 1)
+        obs["images"]["left_depth"] = pixels_l.astype(np.uint8)
+
+        depth_r = physics.render(height=480, width=640, camera_id="right_wrist", depth=True)
+        # Shift nearest values to the origin.
+        depth_r -= depth_r.min()
+        # Scale by 2 mean distances of near rays.
+        depth_r /= 2*depth_r[depth_r <= 1].mean()
+        # Scale to [0, 255]
+        pixels_r = 255*np.clip(depth_r, 0, 1)
+        obs["images"]["right_depth"] = pixels_r.astype(np.uint8)
+
         return obs
