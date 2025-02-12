@@ -292,19 +292,33 @@ class PrimitivesPolicy(BasePolicy):
 
     def generate_trajectory(self, ts_first):
         pass
-    
+        
+
     def is_reached(self, current, target, threshold=0.01):
         print(f"{current=}, {target=}, {np.linalg.norm(current - target)=}")
         return np.linalg.norm(current - target) < threshold
-
-    def move_and_tilt(self, ts, arm, params, approaching=False):
+    
+    def move_and_tilt(self, ts, arm, params, approaching=False, threshold=0.01):
         """Move to a target position and orientation."""
         mocap_pose = ts.observation[f'mocap_pose_{arm}']
         current_xyz, current_quat = mocap_pose[:3], mocap_pose[3:]
+        
         target_xyz, target_quat = params.get("move_position", None), params.get("tilt_quat", None)
+
+        #target_xyz, target_quat = params.get("move_position", None), current_quat
         if not approaching:
             target_xyz = np.array(target_xyz, dtype='float64')[0] if target_xyz is not None else None
-            target_quat = np.array(target_quat, dtype='float64')[0] if target_quat is not None else None
+            target_quat = np.array(target_quat, dtype='float64')[12] if target_quat is not None else None
+        
+        if arm == "left" and target_quat is not None:
+            lq = Quaternion(target_quat)
+            lq = lq * Quaternion(axis=[0.0, 0.0, 1.0], degrees=-60)
+            target_quat = lq.elements
+        elif arm == "right" and target_quat is not None:
+            rq = Quaternion(target_quat)
+            rq = rq * Quaternion(axis=[0.0, 0.0, 1.0], degrees=60)
+            target_quat = rq.elements
+
 
         gripper_status = ts.observation["qpos"][6 if arm =="left" else -1]
         # Interpolate movement
@@ -313,13 +327,14 @@ class PrimitivesPolicy(BasePolicy):
             terminated_move = True
         else:
             new_xyz = current_xyz + 0.02 * (target_xyz - current_xyz)
-            terminated_move = self.is_reached(current_xyz, target_xyz)
+            terminated_move = self.is_reached(current_xyz, target_xyz, threshold)
+
         if target_quat is None:
             terminated_tilt = True
             new_quat = current_quat
         else:
             new_quat = Quaternion.slerp(Quaternion(current_quat), Quaternion(target_quat), 0.1).elements
-            terminated_tilt = self.is_reached(current_quat, target_quat)
+            terminated_tilt = self.is_reached(current_quat, target_quat, threshold)
 
         return np.concatenate([new_xyz, new_quat, [gripper_status]]), terminated_tilt and terminated_move
 
@@ -328,7 +343,7 @@ class PrimitivesPolicy(BasePolicy):
         phase = self.state[arm] or "approach"
         mocap_pose = ts.observation[f'mocap_pose_{arm}']
         current_xyz = mocap_pose[:3]
-        target_quat = mocap_pose[3:]
+        current_quat = mocap_pose[3:]
         object_to_grab = params.get("object_grabbed", None)
         if object_to_grab is None:
             if arm == "left":
@@ -339,33 +354,37 @@ class PrimitivesPolicy(BasePolicy):
         id_object = self.obj_names.index(object_to_grab)
         
         object_to_grab  = object_to_grab + "_mesh"
-        
+        print("Phase: ", phase)
         if phase == "approach":
-            "Get info about the object to grab"
+            # "Get info about the object to grab"
+            
             object_pose = ts.observation["env_state"][id_object*7: id_object*7 + 7]
+            #best_quat = self.compute_grasp_quat(object_pose[3:], "knife")
+            
             params["move_position"] = object_pose[:3]
-            #params["tilt_quat"] = object_pose[3:]
+            params["tilt_quat"] = object_pose[3:]
             self.approach_params[arm] = params
-
-            action, reached = self.move_and_tilt(ts, arm, params, approaching=True)
+            
+            action, reached = self.move_and_tilt(ts, arm, params, approaching=True, threshold=0.01)
             if reached:
                 self.state[arm] = "close"
             return action, False
         
         if phase == "close":
-            action = np.concatenate([current_xyz, target_quat, [0]])  # Close gripper
+            action = np.concatenate([current_xyz, current_quat, [0]])  # Close gripper
             self.state[arm] = "verify"
             return action, False
         
         if phase == "verify":
             gripper_contact = ts.observation[f'contact'][arm]
+            print(f"{gripper_contact=}")
             if object_to_grab in gripper_contact:
                 terminated = True
             else:
                 terminated = False
 
             self.state[arm] = None  # Reset state
-            return np.concatenate([current_xyz, target_quat, [0]]), terminated
+            return np.concatenate([current_xyz, current_quat, [0]]), terminated
         
     def release(self, ts, arm):
         """Open gripper to release object."""
@@ -412,12 +431,13 @@ def test_policy(task_name):
 
     for episode_idx in range(2):
         ts = env.reset()
-        print(ts.observation['contact'])
-        exit()
+        print(f"Episode {episode_idx}")
+        print(env._physics.named.data.xpos['vx300s_right/gripper_link'])
+        print(env._physics.named.data.xquat['vx300s_right/gripper_link'])
         episode = [ts]
         if onscreen_render:
             ax = plt.subplot()
-            plt_img = ax.imshow(ts.observation['images']['teleoperator_pov'])
+            plt_img = ax.imshow(ts.observation['images']['left_wrist'])
             plt.ion()
 
         policy = get_policy(task_name, inject_noise, object)
@@ -457,13 +477,28 @@ def test_policy_primitive(task_name):
     annotations_keys = list(annotations.keys())
 
     ts = env.reset()
+    print(ts.observation['images'].keys())
     finished = False
     curr_primitive = None
     if onscreen_render:
-        ax = plt.subplot()
-        plt_img = ax.imshow(ts.observation['images']['teleoperator_pov'])
-        plt.ion()
-    
+        fig, ax = plt.subplots(2, 2, figsize=(10, 8))  # Two subplots side by side
+        plt_img_teleop = ax[0][0].imshow(ts.observation['images']['teleoperator_pov'])
+        plt_img_collab = ax[0][1].imshow(ts.observation['images']['collaborator_pov'])
+        plt_img_left = ax[1][0].imshow(ts.observation['images']['left_wrist'])
+        plt_img_right = ax[1][1].imshow(ts.observation['images']['right_wrist'])
+        
+        ax[0][0].set_title("Teleoperator View")
+        ax[0][1].set_title("Collaborator View")
+        ax[1][0].set_title("Left Wrist View")
+        ax[1][1].set_title("Right Wrist View")
+
+        
+        plt.ion()  # Interactive mode to update images dynamically
+        plt_img_teleop.set_data(ts.observation['images']['left_wrist'])
+        plt_img_collab.set_data(ts.observation['images']['right_wrist'])
+        plt_img_left.set_data(ts.observation['images']['left_wrist'])
+        plt_img_right.set_data(ts.observation['images']['right_wrist'])
+
     p_index = 0
     primitives_to_execute = {"left": [], "right": []}
     while not finished:
@@ -530,9 +565,13 @@ def test_policy_primitive(task_name):
             ts = env.step(np.concatenate([action_left, action_right]))
 
             if onscreen_render:
-                plt_img.set_data(ts.observation['images']['teleoperator_pov'])
-                plt.pause(0.02)
-
+                plt_img_teleop.set_data(ts.observation['images']['teleoperator_pov'])
+                plt_img_collab.set_data(ts.observation['images']['collaborator_pov'])
+                plt_img_left.set_data(ts.observation['images']['left_wrist'])
+                plt_img_right.set_data(ts.observation['images']['right_wrist'])
+                plt.pause(0.02)  # Pause to allow the figure to update
+                
+            # TODO: Check if it needs also p_{r,l} = None
             finished_primitives = (len(primitives_to_execute["left"]) == 0 and len(primitives_to_execute["right"]) == 0) and (terminated_left and terminated_right)
         
         curr_primitive = None
@@ -541,7 +580,7 @@ def test_policy_primitive(task_name):
 
 if __name__ == '__main__':
 
-    test_task_name = 'primitive'
+    test_task_name = 'sim_transfer_cube_scripted'
     #test_policy(test_task_name)
     test_policy_primitive(test_task_name)
 

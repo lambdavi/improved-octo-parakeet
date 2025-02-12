@@ -18,12 +18,13 @@
         <include file="vx300s_left.xml" />
         <include file="vx300s_right.xml" />
 
-        <body mocap="true" name="mocap_left" pos="-0.3 0.019294 0.44705" quat="0.70710678 0. 0. 0.70710678">
+
+        <body mocap="true" name="mocap_left" pos="-0.3 0.129294 0.44705">
             <site pos="0 0 0" size="0.003 0.003 0.03" type="box" name="mocap_left_site1" rgba="1 0 0 1"/>
             <site pos="0 0 0" size="0.003 0.03 0.003" type="box" name="mocap_left_site2" rgba="1 0 0 1"/>
             <site pos="0 0 0" size="0.03 0.003 0.003" type="box" name="mocap_left_site3" rgba="1 0 0 1"/>
         </body>
-        <body mocap="true" name="mocap_right" pos="0.3 0.019294 0.44705" quat="0.70710678 0. 0. 0.70710678">
+        <body mocap="true" name="mocap_right" pos="0.3 0.129294 0.44705">
             <site pos="0 0 0" size="0.003 0.003 0.03" type="box" name="mocap_right_site1" rgba="1 0 0 1"/>
             <site pos="0 0 0" size="0.003 0.03 0.003" type="box" name="mocap_right_site2" rgba="1 0 0 1"/>
             <site pos="0 0 0" size="0.03 0.003 0.003" type="box" name="mocap_right_site3" rgba="1 0 0 1"/>
@@ -63,9 +64,9 @@
     
 
     <asset>
-        <mesh name="S20005" file="S20005/scan.obj" scale="1 1 1"/>
+        <mesh name="S20005" file="S20005/scan.obj" scale="2 1 1"/>
         <mesh name="O02@0094@00001" file="O02@0094@00001/scan.obj" scale="1 1 1"/>
-        <mesh name="O02@0094@00004" file="O02@0094@00004/scan.obj" scale="2 1 1"/>
+        <mesh name="O02@0094@00004" file="O02@0094@00004/scan.obj" scale="1 1 1"/>
     </asset>
 
 
