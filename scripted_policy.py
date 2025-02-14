@@ -2,9 +2,13 @@ import json
 
 import numpy as np
 from pyquaternion import Quaternion
-
-from constants import SIM_TASK_CONFIGS, PUPPET_JOINT2POS
+import open3d as o3d
+import cv2
+from constants import SIM_TASK_CONFIGS
 from ee_sim_env import make_ee_sim_env
+from policy_utils.policy_utils import *
+import PIL
+from torchvision import transforms
 from time import sleep
 import IPython
 e = IPython.embed
@@ -16,6 +20,11 @@ print(matplotlib.get_backend())
 
 from matplotlib import pyplot as plt
 
+# ENVIRONMENT CONFIGS
+LEFT_CAM_ID = 2
+RIGHT_CAM_ID = 3
+
+# ----------------- POLICIES ----------------- #
 def get_policy(task_name, inject_noise=False, obj_names=None):
 
     if 'sim_transfer_cube' in task_name:
@@ -283,13 +292,15 @@ class GeneralTaskPolicy(BasePolicy):
 
 
 class PrimitivesPolicy(BasePolicy):
-    def __init__(self, inject_noise=False, obj_names=None):
+    def __init__(self, inject_noise=False, obj_names=None, camera_intr=None, affordance_model=None):
         super().__init__(inject_noise)
         self.obj_names = obj_names
         self.state = {"left": None, "right": None}  # Track current execution phase for each arm
         self.left_approach_distance = [0, 0, 0.05]
         self.right_approach_distance = [0, -0.05, 0.05]
         self.approach_params = {"left": None, "right": None}
+        self.affordance_model = affordance_model
+        self.camera_intr = camera_intr
 
     def generate_trajectory(self, ts_first):
         pass
@@ -343,7 +354,7 @@ class PrimitivesPolicy(BasePolicy):
 
     def grab(self, ts, arm, params):
         """Grab an object: move close, then close gripper, then check contact."""
-        phase = self.state[arm] or "approach"
+        phase = self.state[arm] or "setup"
         mocap_pose = ts.observation[f'mocap_pose_{arm}']
         current_xyz = mocap_pose[:3]
         current_quat = mocap_pose[3:]
@@ -358,12 +369,12 @@ class PrimitivesPolicy(BasePolicy):
         
         object_to_grab  = object_to_grab + "_mesh"
         print("Phase: ", phase)
-        if phase == "approach":
+        if phase == "setup":
             # "Get info about the object to grab"
             
             object_pose = ts.observation["env_state"][id_object*7: id_object*7 + 7]
             #best_quat = self.compute_grasp_quat(object_pose[3:], "knife")
-            if arm == "left":
+            """if arm == "left":
                 params["move_position"] = object_pose[:3] + np.array(self.left_approach_distance)
                 self.left_approach_distance[-1] -= 0.02
             else:
@@ -382,9 +393,46 @@ class PrimitivesPolicy(BasePolicy):
                 if arm == "left":
                     self.left_approach_distance = [0, 0, 0.05]
                 else:
-                    self.right_approach_distance = [0, -0.05, 0.05]
+                    self.right_approach_distance = [0, -0.05, 0.05]"""
+            params["move_position"] = object_pose[:3] + np.array([0, -0.1, 0.2])
+            q_grasp = Quaternion(object_pose[3:]) * Quaternion(axis=[1, 0, 0], angle=3.1416)  # Rotate by π around X
+
+            params["tilt_quat"] = q_grasp
+
+            action, reached = self.move_and_tilt(ts, arm, params, approaching=True, threshold=0.03)
+            if reached:
+                self.state[arm] = "affordance"
             return action, False
         
+        if phase == "affordance":
+            
+            # get pointcloud from depth
+            rgb = o3d.geometry.Image(ts.observation['images'][f'{arm}_wrist'])
+            depth = o3d.geometry.Image(ts.observation['images'][f'{arm}_depth'])
+            width, height = rgb.width, rgb.height
+            fx, fy, cx, cy = self.camera_intr[arm]
+            rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(rgb, depth)
+            pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
+                rgbd_image,
+                o3d.camera.PinholeCameraIntrinsic(
+                    width=width,
+                    height=height,
+                    fx=fx, fy=fy,
+                    cx=cx, cy=cy
+                )
+            )
+            pcd.transform([[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]])
+            
+            if reached:
+                self.state[arm] = "close"
+            return action, False
+        
+        if phase == "approach":
+            
+            if reached:
+                self.state[arm] = "close"
+            return action, False
+
         if phase == "close":
             action = np.concatenate([current_xyz, current_quat, [0]])  # Close gripper
             self.state[arm] = "verify"
@@ -413,16 +461,19 @@ class PrimitivesPolicy(BasePolicy):
         if primitive == "MOVE" or primitive == "TILT":
             return self.move_and_tilt(ts, arm, primitive_params)
         if primitive == "GRAB":
-            mocap_pose = ts.observation[f'mocap_pose_{arm}']
+            """mocap_pose = ts.observation[f'mocap_pose_{arm}']
             current_xyz, current_quat = mocap_pose[:3], mocap_pose[3:]
             gripper_status = ts.observation["qpos"][6 if arm =="left" else -1]
-            return np.concatenate([current_xyz, current_quat, [gripper_status]]), True
+            return np.concatenate([current_xyz, current_quat, [gripper_status]]), True"""
+            return self.grab(ts, arm, primitive_params)
         if primitive == "RELEASE":
             return self.release(ts, arm)
         
         return np.zeros(8), True
 
     
+# ----------------- TESTING ----------------- #
+
 def test_policy(task_name):
     # example rolling out pick_and_transfer policy
     onscreen_render = True
@@ -481,21 +532,25 @@ def test_policy_primitive(task_name):
     onscreen_render = True
     inject_noise = False
 
-    
+    #affordance_model = load_model("graspnet/rgbd_resnet_iter_317452.pth")
     # setup the environment
     env = make_ee_sim_env('primitive')
     # Get mocap positions
     # Get left gripper pose
+    ts = env.reset()
+    camera_info = {"left": extract_intrinsics(ts.observation["camera_info"]["left"]), "right": extract_intrinsics(ts.observation["camera_info"]["right"])}
+
     objects=["O02@0094@00001", "O02@0094@00004", "S20005"]
-    policy = PrimitivesPolicy(inject_noise, objects)
+    policy = PrimitivesPolicy(inject_noise, objects, camera_info, None)
 
     with open("annotations.json", 'r') as f:
         annotations = json.load(f)
 
     annotations_keys = list(annotations.keys())
 
-    ts = env.reset()
-    print(ts.observation['images'].keys())
+    
+
+    # Extract intrinsics
     finished = False
     curr_primitive = None
     if onscreen_render:

@@ -58,9 +58,15 @@ def make_ee_sim_env(task_name):
         xml_path = os.path.join(XML_DIR, f'bimanual_viperx_ee_general.xml')
         physics = mujoco.Physics.from_xml_path(xml_path)
         geom_ids = [physics.model.name2id(geom_name, 'geom') for geom_name in ['O02@0094@00001_mesh', 'O02@0094@00004_mesh', 'S20005_mesh']]
-        task = GeneralEETask(geom_ids, random=False)
+        camera_left = mujoco.Camera(physics,480, 620, 2) # 2 ID of left wrist camera
+        camera_right = mujoco.Camera(physics,480, 620, 3) # 3 ID of right wrist camera
+        cameras = [camera_left, camera_right]
+        task = GeneralEETask(geom_ids, cameras, random=False)
         env = control.Environment(physics, task, time_limit=20, control_timestep=DT,
                                   n_sub_steps=None, flat_observation=False)
+        #print(physics.model.name2id('left_wrist', 'camera'), physics.model.name2id('right_wrist', 'camera'), physics.model.ncam)
+        #print(physics.model.)
+        #print("here")
     else:
         raise NotImplementedError
     return env
@@ -311,10 +317,11 @@ class InsertionEETask(BimanualViperXEETask):
         return reward
 
 class GeneralEETask(BimanualViperXEETask):
-    def __init__(self, geoms_ids, random=None):
+    def __init__(self, geoms_ids, cameras, random=None):
         super().__init__(random=random)
         self.max_reward = 3
         self.geoms_ids = geoms_ids
+        self.cameras = cameras
 
     @staticmethod
     def get_env_state(physics):
@@ -406,5 +413,9 @@ class GeneralEETask(BimanualViperXEETask):
         # Scale to [0, 255]
         pixels_r = 255*np.clip(depth_r, 0, 1)
         obs["images"]["right_depth"] = pixels_r.astype(np.uint8)
+
+        # Camera infos
+        obs["camera_info"] = {"left": self.cameras[0].matrices(), "right": self.cameras[1].matrices()}
+
 
         return obs

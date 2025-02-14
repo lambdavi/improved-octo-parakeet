@@ -5,6 +5,9 @@ outputs
 data
 MUJOCO_LOG.txt
 data_local
+gazebosim_pipeline
+test_images
+graspnet
 .vscode
 _wandb
 
