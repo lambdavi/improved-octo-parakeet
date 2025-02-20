@@ -1,4 +1,3 @@
-from graspnet.taskgraspnet import TaskGraspNet
 import torch
 import numpy as np
 

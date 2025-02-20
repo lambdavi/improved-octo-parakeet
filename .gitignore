@@ -2,6 +2,9 @@ bin
 logs
 wandb
 outputs
+license
+log
+
 data
 MUJOCO_LOG.txt
 data_local
@@ -14,7 +17,7 @@ _wandb
 **/.DS_Store
 
 fuse.cfg
-
+*.png
 *.ai
 
 # Generation results
