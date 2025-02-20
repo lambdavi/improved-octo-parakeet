@@ -19,18 +19,6 @@ LEFT_CAM_ID = 2
 RIGHT_CAM_ID = 3
 
 # ----------------- POLICIES ----------------- #
-def get_policy(task_name, inject_noise=False, obj_names=None):
-
-    if 'sim_transfer_cube' in task_name:
-        return PickAndTransferPolicy(inject_noise)
-    elif 'sim_insertion' in task_name:
-        return InsertionPolicy(inject_noise)
-    elif 'general_task' in task_name:
-        return GeneralTaskPolicy(inject_noise)
-    elif 'primitive' in task_name:
-        return PrimitivesPolicy(inject_noise, obj_names)
-    else:
-        raise NotImplementedError
     
 class BasePolicy:
     def __init__(self, inject_noise=False):
