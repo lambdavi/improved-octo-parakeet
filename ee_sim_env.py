@@ -322,6 +322,8 @@ class GeneralEETask(BimanualViperXEETask):
         self.max_reward = 3
         self.geoms_ids = geoms_ids
         self.cameras = cameras
+        self.camera_info = {"left": self.cameras[0].matrices(), "right": self.cameras[1].matrices()}
+        
 
     @staticmethod
     def get_env_state(physics):
@@ -383,39 +385,38 @@ class GeneralEETask(BimanualViperXEETask):
             
             name_geom1 = physics.model.id2name(geom1, "geom")
             name_geom2 = physics.model.id2name(geom2, "geom")
-
             # If either gripper is in contact, add the other geom to the set
-            if geom1 == left_gripper_id:
+            if left_gripper_id in [geom1, geom2]:
                 obs["contact"]["left"].add(name_geom2)
-            elif geom2 == left_gripper_id:
                 obs["contact"]["left"].add(name_geom1)
+                obs["contact"]["left"].add(geom1)
+                obs["contact"]["left"].add(geom2)
 
-            if geom1 == right_gripper_id:
+        
+            if right_gripper_id in [geom1, geom2]:
                 obs["contact"]["right"].add(name_geom2)
-            elif geom2 == right_gripper_id:
                 obs["contact"]["right"].add(name_geom1)
+                obs["contact"]["right"].add(geom1)
+                obs["contact"]["right"].add(geom2)
+
 
         # Add depth images to the observation
         depth_l = physics.render(height=480, width=640, camera_id="left_wrist", depth=True)
-        # Shift nearest values to the origin.
-        depth_l -= depth_l.min()
-        # Scale by 2 mean distances of near rays.
-        depth_l /= 2*depth_l[depth_l <= 1].mean()
-        # Scale to [0, 255]
-        pixels_l = 255*np.clip(depth_l, 0, 1)
-        obs["images"]["left_depth"] = pixels_l.astype(np.uint8)
+        pixels_l = np.clip(depth_l, 0.0, depth_l.max())
+        obs["images"]["left_depth"] = pixels_l
 
         depth_r = physics.render(height=480, width=640, camera_id="right_wrist", depth=True)
-        # Shift nearest values to the origin.
-        depth_r -= depth_r.min()
-        # Scale by 2 mean distances of near rays.
-        depth_r /= 2*depth_r[depth_r <= 1].mean()
-        # Scale to [0, 255]
-        pixels_r = 255*np.clip(depth_r, 0, 1)
-        obs["images"]["right_depth"] = pixels_r.astype(np.uint8)
-
-        # Camera infos
-        obs["camera_info"] = {"left": self.cameras[0].matrices(), "right": self.cameras[1].matrices()}
-
-
+        pixels_r = np.clip(depth_r, 0.0, depth_r.max())
+        obs["images"]["right_depth"] = pixels_r
+        obs["cam_pose"]={
+            "left": {
+                "pos": physics.data.cam_xpos[2],
+                "rot": physics.data.cam_xmat[2].reshape(3,3).T
+            },
+            "right": {
+                "pos": physics.data.cam_xpos[3],
+                "rot": physics.data.cam_xmat[3].reshape(3,3).T
+            }
+        }
+    
         return obs

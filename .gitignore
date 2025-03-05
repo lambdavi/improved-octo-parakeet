@@ -6,11 +6,15 @@ license
 log
 
 data
-MUJOCO_LOG.txt
+MUJOCO_LOG.TXT
+*.log
+*.txt
+*.npy
 data_local
 gazebosim_pipeline
 test_images
 graspnet
+grasp_detection
 .vscode
 _wandb
 
@@ -77,7 +81,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
-
+.TimeRecord
 # Translations
 *.mo
 *.pot

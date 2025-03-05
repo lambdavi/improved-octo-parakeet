@@ -1,7 +1,3 @@
-import torch
-import numpy as np
-
-
 
 def extract_intrinsics(camera_matrices):
     """

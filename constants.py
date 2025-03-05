@@ -35,14 +35,14 @@ SIM_TASK_CONFIGS = {
         'dataset_dir': DATA_DIR + '/general_task',
         'num_episodes': 1,
         'episode_len': 3000,
-        'camera_names': ['collaborator_pov', 'teleoperator_pov', 'left_wrist', 'right_wrist']
+        'camera_names': ['collaborator_pov', 'teleoperator_pov', 'left_wrist', 'right_wrist', 'wrist_cam_left', 'wrist_cam_right']
     },
 
     'primitive': {
         'dataset_dir': DATA_DIR + '/primitive',
         'num_episodes': 1,
         'episode_len': 3000,
-        'camera_names': ['collaborator_pov', 'teleoperator_pov', 'left_wrist', 'right_wrist']
+        'camera_names': ['collaborator_pov', 'teleoperator_pov', 'left_wrist', 'right_wrist', 'wrist_cam_left', 'wrist_cam_right']
     },
 }
 

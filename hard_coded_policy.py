@@ -7,10 +7,6 @@ import argparse
 import pdb
 from PIL import Image
 
-# Anygrasp dependencies
-from gsnet import AnyGrasp
-from graspnetAPI import GraspGroup
-
 # MuJoCo dependencies
 import os
 os.environ["MUJOCO_GL"] = "egl"
@@ -95,7 +91,7 @@ class BasePolicy:
 
 
 class PrimitivesPolicy(BasePolicy):
-    def __init__(self, inject_noise=False, obj_names=None, camera_intr=None):
+    def __init__(self, inject_noise=False, obj_names=None, camera_intr=None, affordance_model=None):
         super().__init__(inject_noise)
         self.obj_names = obj_names
         self.state = {"left": None, "right": None}  # Track current execution phase for each arm
@@ -109,7 +105,7 @@ class PrimitivesPolicy(BasePolicy):
         }
         
         # Create the quaternion
-        self.grabbed = {"left": {"status": False, "grabbed_object": None}, "right": {"status": False, "grabbed_object": None}}
+        self.affordance_model = affordance_model
         self.camera_intr = camera_intr
         self.configure_parser()
 
@@ -137,15 +133,14 @@ class PrimitivesPolicy(BasePolicy):
         """Move to a target position and orientation."""
         mocap_pose = ts.observation[f'mocap_pose_{arm}']
         current_xyz, current_quat = mocap_pose[:3], mocap_pose[3:]
+        
         target_xyz, target_quat = params.get("move_position", None), params.get("tilt_quat", None)
 
-        if target_xyz is not None and len(target_xyz)>3:
-            target_xyz = np.array(target_xyz, dtype='float64')[0]
-        if target_quat is not None and len(target_quat)>4:
-            target_quat = np.array(target_quat, dtype='float64')[12]
         #target_xyz, target_quat = params.get("move_position", None), current_quat
         if not approaching:
-        
+            target_xyz = np.array(target_xyz, dtype='float64')[0] if target_xyz is not None else None
+            target_quat = np.array(target_quat, dtype='float64')[12] if target_quat is not None else None
+
             if arm == "left" and target_quat is not None:
                 lq = Quaternion(target_quat)
                 #lq = lq * Quaternion(axis=[0.0, 0.0, 1.0], degrees=-60)
@@ -156,9 +151,13 @@ class PrimitivesPolicy(BasePolicy):
                 #rq = rq * Quaternion(axis=[0.0, 0.0, 1.0], degrees=60)
                 rq = rq * Quaternion(axis=[1.0, 0.0, 0.0], degrees=-35)
                 target_quat = rq.elements
+            gripper_status = ts.observation["qpos"][6 if arm =="left" else -1]
+        else:
+            if target_quat is not None and len(target_quat)>4:
+                target_quat = np.array(target_quat, dtype='float64')[12]
+            gripper_status = 1
 
-        gripper_status = ts.observation["qpos"][6 if arm =="left" else -1] if not approaching else 1
-
+        #gripper_status = 1
         # Interpolate movement
         if target_xyz is None:
             new_xyz = current_xyz
@@ -179,8 +178,6 @@ class PrimitivesPolicy(BasePolicy):
     def grab(self, ts, arm, params):
         """Grab an object using grasp detection."""
         phase = self.state[arm] or "setup"
-        if self.grabbed[arm]["status"]:
-            self.state[arm] = "verify"
         mocap_pose = ts.observation[f'mocap_pose_{arm}']
         current_xyz = mocap_pose[:3]
         current_quat = mocap_pose[3:]
@@ -224,84 +221,8 @@ class PrimitivesPolicy(BasePolicy):
             action, reached = self.move_and_tilt(ts, arm, params, approaching=True, threshold=0.02)
 
             if reached:
-                # perform grasp detection
-                fx, fy, cx, cy = self.camera_intr[arm]
-                # Extract point cloud from wrist camera
-                rgb = ts.observation['images'][f'{arm}_wrist'] / 255.0
-                depths = ts.observation['images'][f'{arm}_depth']    
-
-                np.save("rgb.npy", rgb)        
-                np.save("depth.npy", depths)       
-                #exit() 
-                scale = 1
-                # set workspace to filter output grasps
-                # TODO: identify object instead of hardcoding it
-                xmin, xmax = -0.2, 0.2
-                ymin, ymax = -0.2, 0.2
-                zmin, zmax = 0, 0.8
-                lims = [xmin, xmax, ymin, ymax, zmin, zmax]
-
-                xmap, ymap = np.arange(depths.shape[1]), np.arange(depths.shape[0])
-                xmap, ymap = np.meshgrid(xmap, ymap)
-                points_z = depths / scale
-                points_x = (xmap - cx) / fx * points_z
-                points_y = (ymap - cy) / fy * points_z
-                mask = (points_z > 0.0) & (points_z < 1.0 )
-                points = np.stack([points_x, points_y, points_z], axis=-1)
-                points = points[mask].astype(np.float32)
-                colors = rgb[mask].astype(np.float32)
-                print(points.max(axis=0), points.min(axis=0))
-                # Initialize AnyGrasp and get grasp candidates
-                anygrasp = AnyGrasp(self.cfgs)
-
-                anygrasp.load_net()
-
-                # Get grasp candidates
-                gg, cloud = anygrasp.get_grasp(points, colors, lims=lims, apply_object_mask=True, dense_grasp=False, collision_detection=True)
-                if gg is None or len(gg) == 0:
-                    print('No Grasp detected after collision detection!')
-                    self.state[arm] = "setup"
-                    return action, False  # Terminate as no grasp is found
-                else:
-                    print("here")
-                #pdb.set_trace()
-                gg_pick = gg.nms().sort_by_score()
-                best_grasp = gg_pick[0]
-                # Extract grasp pose (position & orientation)
-                print(best_grasp)
-                grasp_position = best_grasp.translation
-                grasp_rot = best_grasp.rotation_matrix
-                # SVD-based orthogonalization
-                U, _, Vt = np.linalg.svd(grasp_rot)
-                R_orthogonal = U @ Vt  # Ensures R is a proper rotation matrix
-                diff = np.linalg.norm(grasp_rot - R_orthogonal, ord='fro')
-                print(f"Difference between original and corrected matrix: {diff}")
-                
-                Tgrasp = homogeneous_transform(grasp_position, R_orthogonal)
-                # Transform rot in quat
-                grasp_quat = Quaternion(matrix=R_orthogonal)
                 self.state[arm] = "approach"
-                self.setup_quat = None
-                camera_pos, camera_rot = ts.observation["cam_pose"][arm]["pos"], ts.observation["cam_pose"][arm]["rot"]
-                Tcamera = homogeneous_transform(camera_pos, camera_rot)
-
-                target_pos = camera_rot @ grasp_position + camera_pos
-                target_rot = camera_rot @ R_orthogonal
-                target_quat = Quaternion(matrix=target_rot).elements
-
-    
-                """grasp_translation_cam = grasp_position
-                grasp_rotation_cam = R_orthogonal
-
-                grasp_translation_world = camera_rot @ grasp_translation_cam
-                grasp_rotation_world = camera_rot @ grasp_rotation_cam"""
-                # End target: 0.33667655 -0.0509363   0.0 # similar at least
-                target_pos+=np.array([0.0687,0.02,-0.45])
-
-                self.grab_params[arm]["move_position"]=target_pos
-                #self.grab_params[arm]["move_position"]=current_xyz-grasp_position
-                #self.grab_params[arm]["tilt_quat"]=
-                self.grab_params[arm]["tilt_quat"]=target_quat
+                self.grab_params[arm]["move_position"]=np.array([0.30667655, -0.009363, -0.05])
             return action, False
         
 
@@ -317,7 +238,7 @@ class PrimitivesPolicy(BasePolicy):
             print("THIS(curr, goal, obj)", current_xyz, self.grab_params[arm]["move_position"], obj_pose)
             if self.approach_params[arm] is None:
                 params["move_position"] = self.grab_params[arm]["move_position"]
-                params["tilt_quat"] = self.grab_params[arm]["tilt_quat"]
+                #params["tilt_quat"] = (self.grab_params[arm]["tilt_quat"]* Quaternion(current_quat)).elements
                 self.approach_params[arm] = params
             else:
                 params = self.approach_params[arm]
@@ -330,35 +251,24 @@ class PrimitivesPolicy(BasePolicy):
         
         if phase == "close":
             action = np.concatenate([current_xyz, current_quat, [0]])  # Close gripper
-            print("Current gripper value: ", ts.observation["qpos"][6 if arm =="left" else -1])
-            if ts.observation["qpos"][6 if arm =="left" else -1] < 0.4:
-                self.state[arm] = "verify"
-            else:
-                self.state[arm] = "close"
-
+            self.state[arm] = "verify"
             return action, False
 
         if phase == "verify":
             gripper_contact = ts.observation['contact'][arm]
-            if params["object_grabbed"] is not None:
-                self.grabbed[arm]["grabbed_object"] = params["object_grabbed"]
-
-            if self.grabbed[arm]["grabbed_object"] in gripper_contact:
+            print(f"{gripper_contact}", ts.observation['contact'])
+            if params["object_grabbed"]+"_mesh" in gripper_contact:
                 terminated = True
             else:
                 terminated = False
-            self.grabbed[arm]["status"] = terminated
+
             self.state[arm] = None  # Reset state
-            #pdb.set_trace()
             return np.concatenate([current_xyz, current_quat, [0]]), terminated
 
     def release(self, ts, arm):
         """Open gripper to release object."""
         mocap_pose = ts.observation[f'mocap_pose_{arm}']
         action = np.concatenate([mocap_pose[:3], mocap_pose[3:], [1]])  # Open gripper
-        self.grabbed[arm]["status"] = False
-        self.grabbed[arm]["grabbed_object"] = None
-        self.state[arm] = None
         return action, True
 
     def __call__(self, ts, arm, primitive, primitive_params):
@@ -399,7 +309,7 @@ def test_primitive_policy():
     camera_info = {"left": extract_intrinsics(cam_info["left"]), "right": extract_intrinsics(cam_info["right"])}
     print(camera_info)
     objects=["O02@0094@00001", "O02@0094@00004", "S20005"]
-    policy = PrimitivesPolicy(inject_noise, objects, camera_info)
+    policy = PrimitivesPolicy(inject_noise, objects, camera_info, None)
 
     with open("annotations.json", 'r') as f:
         annotations = json.load(f)
